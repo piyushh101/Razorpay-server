@@ -338,7 +338,8 @@ const PORT = process.env.PORT || 5174;
 // CORS setup
 const allowedOrigins = [
   "http://localhost:5173",          // local dev (Vite)
-  "https://bookkaroo.netlify.app"   // production (Netlify)
+  "https://bookkaroo.netlify.app",
+    "https://razorpay-client-rho.vercel.app" // production (Netlify)
 ];
 
 app.use(
