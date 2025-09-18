@@ -22,26 +22,61 @@ if (!process.env.MONGODB_URI) {
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log("✅ MongoDB connected"))
   .catch(err => console.error("❌ MongoDB error:", err.message));
-  
+
 const app = express();
 app.use(express.static("public")); // serve static files from /server/public
 
 app.use(express.json());
-app.use(
-  cors({
-    origin: process.env.CLIENT_ORIGIN || "http://localhost:5173",
-    credentials: true,
-  })
-);
-  app.get("/api/_debug", (_req, res) => {
+
+// --- CORS setup (reflect allowed origin, single value) ---
+// Read comma separated list from env (if provided)
+const rawAllowed = (process.env.CLIENT_ORIGIN || "")
+  .split(",")
+  .map(s => s.trim())
+  .filter(Boolean);
+
+// default allowed origins for dev + known deploys
+const defaultAllowed = [
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "https://bookkaroo.netlify.app",
+  "https://razorpay-client-rho.vercel.app",
+  "https://razorpay-client-chi.vercel.app"
+];
+
+const allowedOrigins = Array.from(new Set([...rawAllowed, ...defaultAllowed]));
+console.log("CORS allowed origins:", allowedOrigins);
+
+// Use a custom middleware to reflect the single origin (valid when credentials: true)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  // allow requests without an origin (curl, server-to-server)
+  if (!origin) {
+    res.header("Access-Control-Allow-Credentials", "true");
+    return next();
+  }
+
+  if (allowedOrigins.includes(origin)) {
+    // Reflect the requesting origin (single value) — required when sending credentials
+    res.header("Access-Control-Allow-Origin", origin);
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header("Access-Control-Allow-Methods", "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type,Authorization");
+    if (req.method === "OPTIONS") return res.sendStatus(204);
+    return next();
+  } else {
+    // Reject disallowed origins
+    return res.status(403).json({ error: "CORS origin not allowed" });
+  }
+});
+// --- end CORS setup ---
+
+app.get("/api/_debug", (_req, res) => {
   res.json({
     key_id: process.env.RAZORPAY_KEY_ID,
     mode: (process.env.RAZORPAY_KEY_ID || "").startsWith("rzp_test_") ? "test" : "live"
   });
 });
-
-
-
 
 // Razorpay instance
 const razorpay = new Razorpay({
@@ -72,6 +107,7 @@ app.post("/api/orders", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
 app.get("/api/orders/:id", async (req, res) => {
   if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
     return res.status(400).json({ error: "Invalid order id" });
@@ -80,7 +116,6 @@ app.get("/api/orders/:id", async (req, res) => {
   if (!order) return res.status(404).json({ error: "Not found" });
   res.json(order);
 });
-
 
 // Create single-use UPI QR (return id + any links available)
 app.post("/api/qr", async (req, res) => {
@@ -116,7 +151,6 @@ app.get("/api/qr/:id", async (req, res) => {
 });
 
 // Verify payment signature (Checkout success handler)
-// Verify payment signature (Checkout success handler)
 app.post("/api/payment/verify", async (req, res) => {
   const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
 
@@ -145,8 +179,6 @@ app.post("/api/payment/verify", async (req, res) => {
 });
 
 // DEV ONLY: seed sample products
-// DEV ONLY: seed sample products
-
 app.get("/api/_seed", async (req, res) => {
   await Product.deleteMany({});
   const docs = await Product.insertMany([
@@ -175,8 +207,6 @@ app.get("/api/_seed", async (req, res) => {
   res.json({ ok: true, count: docs.length });
 });
 
-
-
 app.get("/api/products", async (req, res) => {
   const products = await Product.find().lean();
   res.json(products);
@@ -190,7 +220,7 @@ const CreateOrderSchema = z.object({
   address: z.object({
     name: z.string().min(2),
     phone: z.string().min(8),
-    email: z.string().email(),   
+    email: z.string().email(),
     line1: z.string().min(3),
     line2: z.string().optional().default(""),
     city: z.string().min(2),
@@ -333,30 +363,8 @@ app.post("/api/payment/verify", async (req, res) => {
   res.json({ ok: true, orderId: updated._id });
 });
 
-
 const PORT = process.env.PORT || 5174;
-// CORS setup
-const allowedOrigins = [
-  "http://localhost:5173",          // local dev (Vite)
-  "https://bookkaroo.netlify.app",
-    "https://razorpay-client-rho.vercel.app" // production (Netlify)
-];
 
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      // allow requests with no origin (like curl, Postman)
-      if (!origin) return callback(null, true);
-
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      } else {
-        return callback(new Error("Not allowed by CORS"));
-      }
-    },
-    credentials: true,
-  })
-);
 // Start server
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ Server running on port ${PORT}`);
